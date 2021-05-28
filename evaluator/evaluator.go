@@ -50,6 +50,27 @@ func Eval(node ast.Node, env *object.Environment) object.Object {
 		}
 
 		return &object.ReturnValue{Value: val}
+	case *ast.FunctionLiteral:
+		params := node.Parameters
+		body := node.Body
+		return &object.Function{Parameters: params, Env: env, Body: body}
+	case *ast.CallExpression:
+		function := Eval(node.Function, env)
+		if isError(function) {
+			return function
+		}
+		args := evalExpressions(node.Arguments, env)
+
+		if len(args) == 1 && isError(args[0]) {
+			return args[0]
+		}
+
+		fn, ok := function.(*object.Function)
+		if !ok {
+			return newError("not a function: %s", fn.Type())
+		}
+
+		return applyFunction(fn, args)
 	case *ast.IfExpression:
 		return evalIfExpression(node, env)
 	case *ast.IntegerLiteral:
@@ -61,6 +82,21 @@ func Eval(node ast.Node, env *object.Environment) object.Object {
 	}
 
 	return nil
+}
+
+func evalExpressions(exprs []ast.Expression, env *object.Environment) []object.Object {
+	var result []object.Object
+
+	for _, e := range exprs {
+		eval := Eval(e, env)
+		if isError(eval) {
+			return []object.Object{eval}
+		}
+
+		result = append(result, eval)
+	}
+
+	return result
 }
 
 func evalProgram(program *ast.Program, env *object.Environment) object.Object {
@@ -125,6 +161,30 @@ func evalInfixExpression(operator string, left, right object.Object) object.Obje
 	}
 }
 
+func applyFunction(fn *object.Function, args []object.Object) object.Object {
+	extendedEnv := extendFunctionEnv(fn, args)
+	evaluated := Eval(fn.Body, extendedEnv)
+	return unwrapReturnValue(evaluated)
+}
+
+func extendFunctionEnv(fn *object.Function, args []object.Object) *object.Environment {
+	env := object.NewEnclosedEnvironment(fn.Env)
+
+	for paramIdx, param := range fn.Parameters {
+		env.Set(param.Value, args[paramIdx])
+	}
+
+	return env
+}
+
+func unwrapReturnValue(obj object.Object) object.Object {
+	if returnValue, ok := obj.(*object.ReturnValue); ok {
+		return returnValue.Value
+	}
+
+	return obj
+}
+
 func evalIfExpression(ie *ast.IfExpression, env *object.Environment) object.Object {
 	condition := Eval(ie.Condition, env)
 	if isError(condition) {
@@ -139,6 +199,7 @@ func evalIfExpression(ie *ast.IfExpression, env *object.Environment) object.Obje
 
 	return NULL
 }
+
 func evalIdentifier(node *ast.Identifier, env *object.Environment) object.Object {
 	val, ok := env.Get(node.Value)
 	if !ok {
